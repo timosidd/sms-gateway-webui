@@ -1,0 +1,148 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>SMS Gateway Web UI</title>
+    <style>
+      body{font-family:Arial,Helvetica,sans-serif;margin:20px}
+      .card{border:1px solid #ddd;padding:12px;margin:8px 0;border-radius:6px}
+      label{display:block;margin-top:8px}
+      input,textarea,select{width:100%;padding:8px;margin-top:4px}
+      button{padding:8px 12px;margin-top:8px}
+      .row{display:flex;gap:12px}
+      .col{flex:1}
+      pre{background:#f7f7f7;padding:8px}
+    </style>
+  </head>
+  <body>
+    <h2>SMS Gateway Web UI</h2>
+
+    <div class="card">
+      <strong>Devices</strong>
+      <div id="devices"></div>
+      <button id="refreshDevices">Refresh</button>
+    </div>
+
+    <div class="card">
+      <strong>Add Device</strong>
+      <div>
+        <label>Name<input id="d_name" /></label>
+        <label>Host / IP<input id="d_host" placeholder="192.168.1.10" /></label>
+        <label>Port<input id="d_port" placeholder="80" /></label>
+        <label>Base path (optional)<input id="d_base" placeholder="api" /></label>
+        <label>API Key (optional)<input id="d_apikey" /></label>
+        <button id="addDevice">Add</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <strong>Bulk add (CSV lines: name,host,port,base,apiKey)</strong>
+      <textarea id="bulk" rows="4" placeholder="name,192.168.1.10,8080,api,mykey"></textarea>
+      <button id="bulkAdd">Add Bulk</button>
+    </div>
+
+    <div class="card">
+      <strong>Select Device</strong>
+      <select id="selectDevice"></select>
+      <div class="row">
+        <div class="col">
+          <h4>Inbox</h4>
+          <button id="loadSms">Load SMS</button>
+          <div id="smsList"></div>
+        </div>
+        <div class="col">
+          <h4>Send SMS</h4>
+          <label>To<input id="to" /></label>
+          <label>Message<textarea id="message" rows="4"></textarea></label>
+          <button id="sendSms">Send</button>
+          <pre id="sendResult"></pre>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      async function api(path, opts){
+        const res = await fetch(path, opts);
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) return res.json();
+        return res.text();
+      }
+
+      async function refreshDevices(){
+        const devs = await api('/api/devices');
+        const container = document.getElementById('devices');
+        container.innerHTML = '';
+        const sel = document.getElementById('selectDevice');
+        sel.innerHTML = '';
+        devs.forEach(d => {
+          const div = document.createElement('div');
+          div.className = 'card';
+          div.innerHTML = `<b>${d.name||d.host}</b> <small>${d.host}${d.port?(':'+d.port):''}/${d.basePath||''}</small> <button data-id="${d.id}" class="del">Delete</button>`;
+          container.appendChild(div);
+          const opt = document.createElement('option'); opt.value = d.id; opt.text = d.name||d.host; sel.appendChild(opt);
+        });
+        container.querySelectorAll('.del').forEach(btn=>btn.addEventListener('click', async e=>{
+          const id = e.target.getAttribute('data-id');
+          await fetch('/api/devices/'+id,{method:'DELETE'});
+          refreshDevices();
+        }));
+      }
+
+      document.getElementById('refreshDevices').addEventListener('click', refreshDevices);
+
+      document.getElementById('addDevice').addEventListener('click', async ()=>{
+        const d = {
+          name: document.getElementById('d_name').value,
+          host: document.getElementById('d_host').value,
+          port: document.getElementById('d_port').value,
+          basePath: document.getElementById('d_base').value,
+          apiKey: document.getElementById('d_apikey').value
+        };
+        await fetch('/api/devices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(d)});
+        refreshDevices();
+      });
+
+      document.getElementById('bulkAdd').addEventListener('click', async ()=>{
+        const text = document.getElementById('bulk').value.trim();
+        if (!text) return;
+        const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+        const items = lines.map(l=>{
+          const parts = l.split(',').map(p=>p.trim());
+          return {name:parts[0], host:parts[1], port:parts[2], basePath:parts[3], apiKey:parts[4]};
+        });
+        await fetch('/api/devices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(items)});
+        refreshDevices();
+      });
+
+      document.getElementById('loadSms').addEventListener('click', async ()=>{
+        const id = document.getElementById('selectDevice').value;
+        if (!id) return alert('select device');
+        const res = await api('/api/proxy/'+id+'/sms');
+        const out = document.getElementById('smsList');
+        out.innerHTML = '';
+        if (Array.isArray(res)){
+          res.forEach(m=>{
+            const div = document.createElement('div'); div.className='card';
+            div.innerHTML = `<b>${m.from||m.sender||m.address}</b> <small>${m.date||''}</small><div>${m.body||m.message||JSON.stringify(m)}</div>`;
+            out.appendChild(div);
+          })
+        } else {
+          out.innerHTML = '<pre>'+JSON.stringify(res,null,2)+'</pre>';
+        }
+      });
+
+      document.getElementById('sendSms').addEventListener('click', async ()=>{
+        const id = document.getElementById('selectDevice').value;
+        if (!id) return alert('select device');
+        const to = document.getElementById('to').value;
+        const message = document.getElementById('message').value;
+        const res = await api('/api/proxy/'+id+'/sms',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({to,message})});
+        document.getElementById('sendResult').textContent = JSON.stringify(res,null,2);
+      });
+
+      // initial
+      refreshDevices();
+    </script>
+  </body>
+</html>
